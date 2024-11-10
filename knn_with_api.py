@@ -98,11 +98,17 @@ def open_file_dialog(scaler):
         file_path_converted = file_path.replace('/', '\\')  # Изменяем вид пути
         original_data = preprocessing_of_data('C:\\Users\\andrew\\Downloads\\office_nn.xlsx')
         data = preprocessing_of_data(file_path_converted)  # Используем выбранный файл
-         # Проверяем наличие данных для расчета
+
+        # Проверяем наличие данных для расчета
         if not data['Удельная цена, руб./кв.м'].isnull().all() and (data['Удельная цена, руб./кв.м'] != 0).any():
-            result_table, predicted_values, actual_values = knn_predict(data, original_data, scaler)  # Вызываем предсказание
+            # Шаг 1: Выполняем предсказание
+            predicted_values, distances, indices = knn_predict(data, original_data, scaler)
             
+            # Шаг 2: Создаем таблицу и сохраняем в Excel
+            result_table = create_excel_table(data, original_data, predicted_values, indices)
+
             # Выводим ошибку
+            actual_values = data['Удельная цена, руб./кв.м'].values
             error_message = error_output(predicted_values, actual_values)
             text_output.delete(1.0, tk.END)  # Очищаем текстовое поле
             text_output.insert(tk.END, error_message)  # Вставляем текст ошибки
@@ -136,93 +142,93 @@ def knn_study(data):
 data_study = preprocessing_of_data('C:\\Users\\andrew\\Downloads\\office_nn.xlsx')
 scaler = knn_study(data_study)
 
-# Функция для предсказания
 def knn_predict(data, original_data, scaler):
+    """
+    Функция для предсказания цен на основе KNN модели.
+    Возвращает предсказания, исходные данные и индексы ближайших соседей.
+    """
     # Загружаем модель
     knn = joblib.load('knn_model.joblib')
     
     # Определяем признаки
     X_target = data[['Класс', 'Охрана', 'Парковка', 'Состояние ремонта', 'Отдельный вход', 'Широта', 'Долгота', 'Общая площадь,\nкв.м']]
-    # Масштабируем данные (используем transform)
+    # Масштабируем данные
     X_scaled = scaler.transform(X_target)
+    
     # Получаем предсказания
     predicted_value = knn.predict(X_scaled)
     predicted_value = np.exp(predicted_value)  # Возвращаем обратно в исходные единицы
 
+    # Вычисляем ошибку, если известны фактические цены
     if 'Удельная цена, руб./кв.м' in data.columns and not data['Удельная цена, руб./кв.м'].isnull().all():
         actual_prices = data['Удельная цена, руб./кв.м'].values
-        # Вычисляем ошибку
-        error = np.median(np.abs(actual_prices - predicted_value) / actual_prices * 100)  
+        error = np.median(np.abs(actual_prices - predicted_value) / actual_prices * 100)
         print(f'Ошибка предсказания: {error:.4f}%')
 
-    # Получение массива расстояний и индексов для ближайших соседей
-    distances, indices = knn.kneighbors(X_scaled)  # Используем X_scaled
+    # Получение расстояний и индексов ближайших соседей
+    distances, indices = knn.kneighbors(X_scaled)
+    
+    return predicted_value, distances, indices
+
+def create_excel_table(data, original_data, predicted_value, indices, output_file='data.xlsx'):
+    """
+    Функция для создания Excel таблицы с предсказанными значениями и выделением строк.
+    Сохраняет результат в Excel файл.
+    """
     # Создание DataFrame для предсказанных значений
     predictions_df = pd.DataFrame(predicted_value, columns=['Предсказанная цена, руб.'])
-    # Создание нового DataFrame для результатов
     new_rows = []
-    
-    k = knn.n_neighbors
-    # Добавляем индексы объектов для сопоставления с оригинальными данными
+    k = len(indices[0])  # Количество соседей
+
+    # Добавляем строки с предсказанными значениями
     for i in range(len(data)):
         row = data.iloc[i].copy()
         row['Предсказанная цена, руб.'] = predictions_df.iloc[i, 0]
         new_rows.append(row)
 
-        # Проверка на наличие точного совпадения
+        # Проверка на точное совпадение
         exact_match = original_data[
-            (original_data[['Класс', 'Охрана', 'Парковка', 'Состояние ремонта', 'Отдельный вход', 'Широта', 'Долгота', 'Общая площадь,\nкв.м','Цена предложения,\n руб.', 'Удельная цена, руб./кв.м']] 
+            (original_data[['Класс', 'Охрана', 'Парковка', 'Состояние ремонта', 'Отдельный вход', 'Широта', 'Долгота', 'Общая площадь,\nкв.м', 'Цена предложения,\n руб.', 'Удельная цена, руб./кв.м']] 
             == row[['Класс', 'Охрана', 'Парковка', 'Состояние ремонта', 'Отдельный вход', 'Широта', 'Долгота', 'Общая площадь,\nкв.м', 'Цена предложения,\n руб.', 'Удельная цена, руб./кв.м']].values).all(axis=1)
         ]
 
         if not exact_match.empty:
-            # Добавляем только первое точное совпадение
             match_row_copy = exact_match.iloc[0].copy()
             match_row_copy['Предсказанная цена, руб.'] = None
             new_rows.append(match_row_copy)
-            
-            # Добавляем k-1 ближайших соседей
             indices_neighbors = indices[i][1:k] 
         else:
-            # Если точного совпадения нет, добавляем k ближайших соседей
             indices_neighbors = indices[i][:k]
 
         for neighbor_index in indices_neighbors:
             neighbor_row = original_data.iloc[neighbor_index].copy()
             neighbor_row['Предсказанная цена, руб.'] = None
             new_rows.append(neighbor_row)
-                        
-    # Создаем DataFrame из собранных строк
+
+    # Создаём DataFrame из новых строк
     result_df = pd.DataFrame(new_rows)
     result_df.reset_index(drop=True, inplace=True)
 
     # Сохранение результата в Excel файл
-    result_df.to_excel('data.xlsx', index=False, engine='openpyxl')
+    result_df.to_excel(output_file, index=False, engine='openpyxl')
 
-    # Открытие файла Excel для редактирования и выделения предсказанных строк
-    wb = openpyxl.load_workbook('data.xlsx')
+    # Открытие Excel для выделения предсказанных строк
+    wb = openpyxl.load_workbook(output_file)
     ws = wb.active
     yellow_fill = PatternFill(start_color='FFFF00', end_color='FFFF00', fill_type='solid')
-    
-    # Итерация по строкам DataFrame для выделения
+
     for i in range(len(result_df)):
-        # Проверяем, что в строке есть предсказанная цена (и она не NaN)
         if pd.notna(result_df.iloc[i]['Предсказанная цена, руб.']):
-            # Проходим по всем ячейкам в строке i + 2
-            for col in range(1, len(result_df.columns) + 1):  # Применяем заливку ко всем столбцам этой строки
-                ws.cell(row=i + 2, column=col).fill = yellow_fill  # +2 для пропуска заголовков
+            for col in range(1, len(result_df.columns) + 1):
+                ws.cell(row=i + 2, column=col).fill = yellow_fill
 
-    # Сохранение изменений в файле
-    wb.save('data.xlsx')
+    # Сохранение и закрытие файла
+    wb.save(output_file)
     wb.close()
-    os.startfile('data.xlsx')
+    os.startfile(output_file)
 
-    # Возврат результата
-    if 'Удельная цена, руб./кв.м' in data.columns and not data['Удельная цена, руб./кв.м'].isnull().all():
-        actual_prices = data['Удельная цена, руб./кв.м'].values
-        return result_df, predicted_value, actual_prices
-    else:
-        return result_df
+    return result_df
+
 
 def plot_feature_importance(data, scaler, frame): 
     # Определяем признаки
