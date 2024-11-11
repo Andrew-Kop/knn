@@ -13,6 +13,7 @@ from openpyxl.styles import PatternFill
 from sklearn.inspection import permutation_importance
 import matplotlib.pyplot as plt
 from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
+from openpyxl import load_workbook
 
 scaler = StandardScaler()
 
@@ -106,7 +107,7 @@ def open_file_dialog(scaler):
             
             # Шаг 2: Создаем таблицу и сохраняем в Excel
             result_table = create_excel_table(data, original_data, predicted_values, indices)
-
+            result_table_template = create_excel_table_template(result_table)
             # Выводим ошибку
             actual_values = data['Удельная цена, руб./кв.м'].values
             error_message = error_output(predicted_values, actual_values)
@@ -116,8 +117,13 @@ def open_file_dialog(scaler):
             # Строим график
             plot_feature_importance(data, scaler, frame)
         else: 
+            # Создаем таблицу и сохраняем в Excel без заполнения столбца 'Изменение цены, %'
+            predicted_values = pd.DataFrame({'predicted_values': [np.nan] * len(data)})
+            result_table = create_excel_table(data, original_data, predicted_values, indices)
+            result_table_template = create_excel_table_template(result_table, calculate_change=False)
             text_output.delete(1.0, tk.END)  # Очищаем текстовое поле
             text_output.insert(tk.END, "Нет данных для вывода значения ошибки и построения графика приоритетов.")  # Сообщение об отсутствии данных
+
 
 # Функция для изучения KNN
 def knn_study(data):
@@ -176,14 +182,14 @@ def create_excel_table(data, original_data, predicted_value, indices, output_fil
     Сохраняет результат в Excel файл.
     """
     # Создание DataFrame для предсказанных значений
-    predictions_df = pd.DataFrame(predicted_value, columns=['Предсказанная цена, руб.'])
+    predictions_df = pd.DataFrame(predicted_value, columns=['Предсказанная цена, руб/кв.м.'])
     new_rows = []
     k = len(indices[0])  # Количество соседей
 
     # Добавляем строки с предсказанными значениями
     for i in range(len(data)):
         row = data.iloc[i].copy()
-        row['Предсказанная цена, руб.'] = predictions_df.iloc[i, 0]
+        row['Предсказанная цена, руб/кв.м.'] = predictions_df.iloc[i, 0]
         new_rows.append(row)
 
         # Проверка на точное совпадение
@@ -194,7 +200,7 @@ def create_excel_table(data, original_data, predicted_value, indices, output_fil
 
         if not exact_match.empty:
             match_row_copy = exact_match.iloc[0].copy()
-            match_row_copy['Предсказанная цена, руб.'] = None
+            match_row_copy['Предсказанная цена, руб/кв.м.'] = None
             new_rows.append(match_row_copy)
             indices_neighbors = indices[i][1:k] 
         else:
@@ -202,7 +208,7 @@ def create_excel_table(data, original_data, predicted_value, indices, output_fil
 
         for neighbor_index in indices_neighbors:
             neighbor_row = original_data.iloc[neighbor_index].copy()
-            neighbor_row['Предсказанная цена, руб.'] = None
+            neighbor_row['Предсказанная цена, руб/кв.м.'] = None
             new_rows.append(neighbor_row)
 
     # Создаём DataFrame из новых строк
@@ -218,16 +224,68 @@ def create_excel_table(data, original_data, predicted_value, indices, output_fil
     yellow_fill = PatternFill(start_color='FFFF00', end_color='FFFF00', fill_type='solid')
 
     for i in range(len(result_df)):
-        if pd.notna(result_df.iloc[i]['Предсказанная цена, руб.']):
+        if pd.notna(result_df.iloc[i]['Предсказанная цена, руб/кв.м.']):
             for col in range(1, len(result_df.columns) + 1):
                 ws.cell(row=i + 2, column=col).fill = yellow_fill
 
     # Сохранение и закрытие файла
     wb.save(output_file)
     wb.close()
-    os.startfile(output_file)
+    #os.startfile(output_file)
 
     return result_df
+
+def create_excel_table_template(result_df, template_file='Таблица шаблон.xlsx',calculate_change=True ):
+    # Чтение первых двух строк из файла шаблона
+    template_df = pd.read_excel(template_file, header=None, nrows=2)
+    
+    # Создаем новый DataFrame на основе нужных столбцов из result_df
+    new_dataframe = result_df[['N', 'Ссылка', 'Сегмент', 'Тип сделки', 
+                               'Город', 'Адрес', 'Функциональная зона', 'Широта', 'Долгота',
+                               'Этаж', 'Класс', 'Состояние ремонта', 'Общая площадь,\nкв.м',  
+                               'Год постройки', 'Этажность', 'Материал стен', 'Охрана', 'Парковка',
+                               'Удельная цена, руб./кв.м', 'Цена предложения,\n руб.', 
+                               'Предсказанная цена, руб/кв.м.', 'Дата парсинга', 'Срок жизни/возраст объявления']]
+    print(new_dataframe)
+    print(new_dataframe['Удельная цена, руб./кв.м'])
+    # Инициализация новых столбцов
+    new_dataframe.insert(4, 'Тип рынка', 'Офис')
+    new_dataframe.insert(12, 'Количество комнат', 1)
+    new_dataframe.insert(23, 'Предсказанная цена, руб.', 
+                         new_dataframe['Предсказанная цена, руб/кв.м.'] * new_dataframe['Общая площадь,\nкв.м'])
+                         
+    if calculate_change:
+        new_dataframe.insert(24, 'Изменение цены, %', 
+                             ((new_dataframe['Предсказанная цена, руб/кв.м.'] - new_dataframe['Удельная цена, руб./кв.м']) / 
+                              new_dataframe['Удельная цена, руб./кв.м']) * 100)
+    else:
+        new_dataframe.insert(24, 'Изменение цены, %', '-')
+    # Загружаем существующий Excel файл
+    wb = load_workbook(template_file)
+    ws = wb.active
+    
+    # Записываем строки из new_dataframe начиная с 3-й строки (первая и вторая строки уже заняты)
+    start_row = 3  # Запись начнется с третьей строки
+    for r_idx, row in new_dataframe.iterrows():
+        for c_idx, value in enumerate(row, start=1):
+            # Используйте start_row + r_idx, чтобы точно указать, на какую строку в Excel писать
+            ws.cell(row=start_row + r_idx, column=c_idx, value=value)
+
+    
+    # Выделение предсказанных строк желтым цветом
+    yellow_fill = PatternFill(start_color='FFFF00', end_color='FFFF00', fill_type='solid')
+    for i in range(len(new_dataframe)):
+        if pd.notna(new_dataframe.iloc[i]['Предсказанная цена, руб/кв.м.']):
+            for col in range(1, len(new_dataframe.columns) + 1):
+                ws.cell(row=start_row + i, column=col).fill = yellow_fill
+
+    # Сохранение и закрытие файла
+    wb.save(template_file)
+    wb.close()
+    
+    # Открытие Excel файла для просмотра
+    os.startfile(template_file)
+
 
 
 def plot_feature_importance(data, scaler, frame): 
