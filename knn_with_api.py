@@ -14,6 +14,7 @@ from sklearn.inspection import permutation_importance
 import matplotlib.pyplot as plt
 from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
 from openpyxl import load_workbook
+from openpyxl.drawing.image import Image
 
 scaler = StandardScaler()
 
@@ -145,7 +146,7 @@ def knn_study(data):
     joblib.dump(knn, 'knn_model.joblib')
     return scaler 
 
-data_study = preprocessing_of_data('C:\\Users\\andrew\\Downloads\\office_nn.xlsx')
+data_study = preprocessing_of_data('C:\\Users\\andrew\\Downloads\\office_nn_copy.xlsx')
 scaler = knn_study(data_study)
 
 def knn_predict(data, original_data, scaler):
@@ -235,7 +236,7 @@ def create_excel_table(data, original_data, predicted_value, indices, output_fil
 
     return result_df
 
-def create_excel_table_template(result_df, template_file='Таблица шаблон.xlsx',calculate_change=True ):
+def create_excel_table_template(result_df, template_file='Таблица шаблон.xlsx', calculate_change=True):
     # Чтение первых двух строк из файла шаблона
     template_df = pd.read_excel(template_file, header=None, nrows=2)
     
@@ -246,8 +247,12 @@ def create_excel_table_template(result_df, template_file='Таблица шаб�
                                'Год постройки', 'Этажность', 'Материал стен', 'Охрана', 'Парковка',
                                'Удельная цена, руб./кв.м', 'Цена предложения,\n руб.', 
                                'Предсказанная цена, руб/кв.м.', 'Дата парсинга', 'Срок жизни/возраст объявления']]
-    print(new_dataframe)
-    print(new_dataframe['Удельная цена, руб./кв.м'])
+    
+     # Преобразуем значения в столбцах "Состояние ремонта", "Парковка" и "Охрана"
+    new_dataframe.loc[:, 'Состояние ремонта'] = new_dataframe['Состояние ремонта'].replace({True: 'Есть', False: 'Нет'})
+    new_dataframe.loc[:, 'Парковка'] = new_dataframe['Парковка'].replace({True: 'Есть', False: 'Нет'})
+    new_dataframe.loc[:, 'Охрана'] = new_dataframe['Охрана'].replace({True: 'Есть', False: 'Нет'})
+
     # Инициализация новых столбцов
     new_dataframe.insert(4, 'Тип рынка', 'Офис')
     new_dataframe.insert(12, 'Количество комнат', 1)
@@ -260,24 +265,27 @@ def create_excel_table_template(result_df, template_file='Таблица шаб�
                               new_dataframe['Удельная цена, руб./кв.м']) * 100)
     else:
         new_dataframe.insert(24, 'Изменение цены, %', '-')
+    
     # Загружаем существующий Excel файл
     wb = load_workbook(template_file)
     ws = wb.active
     
     # Записываем строки из new_dataframe начиная с 3-й строки (первая и вторая строки уже заняты)
-    start_row = 3  # Запись начнется с третьей строки
+    start_row = 3
     for r_idx, row in new_dataframe.iterrows():
         for c_idx, value in enumerate(row, start=1):
-            # Используйте start_row + r_idx, чтобы точно указать, на какую строку в Excel писать
             ws.cell(row=start_row + r_idx, column=c_idx, value=value)
 
-    
     # Выделение предсказанных строк желтым цветом
     yellow_fill = PatternFill(start_color='FFFF00', end_color='FFFF00', fill_type='solid')
     for i in range(len(new_dataframe)):
         if pd.notna(new_dataframe.iloc[i]['Предсказанная цена, руб/кв.м.']):
             for col in range(1, len(new_dataframe.columns) + 1):
                 ws.cell(row=start_row + i, column=col).fill = yellow_fill
+
+    # Строим гистограмму для столбца "Изменение цены, %" и вставляем её в Excel
+    plot_histogram(new_dataframe['Изменение цены, %'], 'histogram.png')
+    insert_image_to_excel(ws, 'histogram.png', 'AB3')
 
     # Сохранение и закрытие файла
     wb.save(template_file)
@@ -286,6 +294,25 @@ def create_excel_table_template(result_df, template_file='Таблица шаб�
     # Открытие Excel файла для просмотра
     os.startfile(template_file)
 
+
+def plot_histogram(data, filename):
+    """Строим гистограмму и сохраняем её как изображение"""
+    plt.figure(figsize=(8, 5))
+    data = data.dropna()  # Удаляем NaN значения
+    plt.hist(data, bins=20, color='lightcoral', edgecolor='black', alpha=0.75)
+    plt.title('Распределение изменения цен, %')
+    plt.xlabel('Изменение цены, %')
+    plt.ylabel('Частота')
+    plt.grid(True, linestyle='--', alpha=0.6)
+    plt.tight_layout()
+    plt.savefig(filename)
+    plt.close()
+
+
+def insert_image_to_excel(ws, image_path, cell):
+    """Вставка изображения в Excel"""
+    img = Image(image_path)
+    ws.add_image(img, cell)
 
 
 def plot_feature_importance(data, scaler, frame): 
