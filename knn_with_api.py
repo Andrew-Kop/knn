@@ -1,22 +1,71 @@
+# Обработка данных
 import pandas as pd
-import tkinter as tk
 import numpy as np
-import joblib
-import os
+
+# Интерфейс и файловые диалоги
+import tkinter as tk
 from tkinter import filedialog
-from sklearn.preprocessing import LabelEncoder
-from sklearn.preprocessing import StandardScaler
+
+# Машинное обучение
+from sklearn.preprocessing import LabelEncoder, StandardScaler
 from sklearn.model_selection import train_test_split
 from sklearn.neighbors import KNeighborsRegressor
+from sklearn.inspection import permutation_importance
+
+# Работа с Excel
 import openpyxl
 from openpyxl.styles import PatternFill
-from sklearn.inspection import permutation_importance
+from openpyxl.utils.dataframe import dataframe_to_rows
+from openpyxl.drawing.image import Image
+from openpyxl import load_workbook, Workbook
+
+# Сохранение и загрузка моделей
+import joblib
+
+# Работа с файловой системой
+import os
+from shutil import copyfile
+
+# Визуализация
 import matplotlib.pyplot as plt
 from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
-from openpyxl import load_workbook
-from openpyxl.drawing.image import Image
+
+#Остальное
+import math
+from sklearn.model_selection import GridSearchCV
+from sklearn.metrics import mean_absolute_error
 
 scaler = StandardScaler()
+
+
+
+def haversine_distance(lat1, lon1, lat2, lon2):
+    """
+    Расстояние между двумя точками на сфере по формуле Haversine.
+    """
+    R = 6371  # Радиус Земли в километрах
+    lat1, lon1, lat2, lon2 = map(math.radians, [lat1, lon1, lat2, lon2])
+
+    dlat = lat2 - lat1
+    dlon = lon2 - lon1
+
+    a = math.sin(dlat / 2) ** 2 + math.cos(lat1) * math.cos(lat2) * math.sin(dlon / 2) ** 2
+    c = 2 * math.atan2(math.sqrt(a), math.sqrt(1 - a))
+
+    distance = R * c * 1000  # Расстояние в метрах
+    return round(distance, 1)  # Округляем до одного знака после запятой
+
+
+# Загрузить данные и обучить LabelEncoder
+data_study = pd.read_excel('C:\\Users\\andrew\\Downloads\\office_nn.xlsx')
+
+# Создаём и обучаем LabelEncoder для столбца 'Функциональная зона'
+label_encoder_1 = LabelEncoder()
+label_encoder_1.fit(data_study['Функциональная зона'])
+
+# Создаём и обучаем LabelEncoder для столбца 'Класс'
+label_encoder_2 = LabelEncoder()
+label_encoder_2.fit(data_study['Класс'])
 
 def preprocessing_of_data(file_path):
     data = pd.read_excel(file_path)
@@ -63,32 +112,60 @@ def preprocessing_of_data(file_path):
     data['Состояние ремонта'] = data['Состояние ремонта'].fillna(False)
     data['Состояние ремонта'] = data['Состояние ремонта'].astype(bool)
 
-    key_columns = ['Класс', 'Охрана', 'Парковка', 'Состояние ремонта', 'Отдельный вход', 'Широта', 'Долгота', 'Общая площадь,\nкв.м']
+    key_columns = ['Класс', 'Функциональная зона','Охрана', 'Парковка', 'Состояние ремонта', 'Отдельный вход', 'Широта', 'Долгота', 'Общая площадь,\nкв.м']
     data = data.dropna(subset=key_columns)
     
     data['Широта'] = pd.to_numeric(data['Широта'], errors='coerce')
     data['Долгота'] = pd.to_numeric(data['Долгота'], errors='coerce')
-    data['Общая площадь,\nкв.м'] = pd.to_numeric(data['Общая площадь,\nкв.м'], errors='coerce')\
-    
-    #Преобразует для класса в числовые данные
-    label_encoder = LabelEncoder()
-    data['Класс'] = label_encoder.fit_transform(data['Класс'])
+    data['Общая площадь,\nкв.м'] = pd.to_numeric(data['Общая площадь,\nкв.м'], errors='coerce')
+
+    #  Применяем кодирование к столбцам в data_study
+    data['Функциональная зона'] = label_encoder_1.transform(data['Функциональная зона'])
+    data['Класс'] = label_encoder_2.transform(data['Класс'])
+
     return data
-    # Создание DataFrame и сохранение в Excel
-    #df = pd.DataFrame(data)
-    #data_show=df.to_excel('data.xlsx', index=False)
-    #os.startfile('data.xlsx')
 
 def find_best_k(X_train, X_test, Y_train, Y_test):
-    best_k, best_error = 0, float('inf')
-    for k in range(2, 52):
-        knn = KNeighborsRegressor(n_neighbors=k, weights='distance', metric='euclidean')
-        knn.fit(X_train, Y_train)
-        Y_pred = np.exp(knn.predict(X_test))
-        error = np.median(np.abs(np.exp(Y_test) - Y_pred) / np.exp(Y_test) * 100)
-        if error < best_error:
-            best_k, best_error = k, error
-    return best_k, best_error
+    # Параметры для сеточного поиска
+    param_grid = {
+        'n_neighbors': range(2, 52),  # Количество соседей
+        'weights': ['uniform', 'distance'],  # Веса соседей
+        'metric': ['euclidean', 'manhattan', 'chebyshev', 'minkowski'],  # Метрики расстояния
+        'p': [1, 2],  # Параметр p для метрики minkowski (1 - манхэттенское, 2 - евклидово расстояние)
+    }
+
+    # Инициализация модели KNN
+    knn = KNeighborsRegressor()
+
+    # Инициализация GridSearchCV с использованием кросс-валидации
+    grid_search = GridSearchCV(estimator=knn, param_grid=param_grid, cv=5, n_jobs=-1, scoring='neg_mean_absolute_error')
+
+    # Обучение модели с сеточным поиском
+    grid_search.fit(X_train, Y_train)
+
+    # Лучшая комбинация гиперпараметров
+    best_params = grid_search.best_params_
+    best_k = best_params['n_neighbors']
+    best_weights = best_params['weights']
+    best_metric = best_params['metric']
+    best_p = best_params['p']
+    
+    # Вывод результатов
+    #print(f"Лучший k: {best_k}")
+    #print(f"Лучшие веса: {best_weights}")
+    #print(f"Лучшая метрика: {best_metric}")
+    #print(f"Лучший p: {best_p}")
+
+    # Прогнозирование с лучшими гиперпараметрами
+    knn_best = KNeighborsRegressor(n_neighbors=best_k, weights=best_weights, metric=best_metric, p=best_p)
+    knn_best.fit(X_train, Y_train)
+    Y_pred = np.exp(knn_best.predict(X_test))
+
+    # Оценка ошибки
+    error = np.median(np.abs(np.exp(Y_test) - Y_pred) / np.exp(Y_test) * 100)
+    print(f"Ошибка: {error}%")
+    
+    return best_k, best_weights, best_metric, best_p, error
 
 def open_file_dialog(scaler):
     file_path = filedialog.askopenfilename(
@@ -107,7 +184,7 @@ def open_file_dialog(scaler):
             predicted_values, distances, indices = knn_predict(data, original_data, scaler)
             
             # Шаг 2: Создаем таблицу и сохраняем в Excel
-            result_table = create_excel_table(data, original_data, predicted_values, indices)
+            result_table = create_excel_table(data, original_data, predicted_values, distances, indices)
             result_table_template = create_excel_table_template(result_table)
             # Выводим ошибку
             actual_values = data['Удельная цена, руб./кв.м'].values
@@ -120,7 +197,7 @@ def open_file_dialog(scaler):
         else: 
             # Создаем таблицу и сохраняем в Excel без заполнения столбца 'Изменение цены, %'
             predicted_values = pd.DataFrame({'predicted_values': [np.nan] * len(data)})
-            result_table = create_excel_table(data, original_data, predicted_values, indices)
+            result_table = create_excel_table(data, original_data, predicted_values, distances, indices)
             result_table_template = create_excel_table_template(result_table, calculate_change=False)
             text_output.delete(1.0, tk.END)  # Очищаем текстовое поле
             text_output.insert(tk.END, "Нет данных для вывода значения ошибки и построения графика приоритетов.")  # Сообщение об отсутствии данных
@@ -129,24 +206,36 @@ def open_file_dialog(scaler):
 # Функция для изучения KNN
 def knn_study(data):
     # Определяем признаки и целевую переменную
-    X_target = data[['Класс', 'Охрана', 'Парковка', 'Состояние ремонта', 'Отдельный вход', 'Широта', 'Долгота', 'Общая площадь,\nкв.м']]
+    X_target = data[['Класс', 'Функциональная зона', 'Охрана', 'Парковка', 'Состояние ремонта', 'Отдельный вход', 'Широта', 'Долгота', 'Общая площадь,\nкв.м']]
     Y_target = np.log(data['Удельная цена, руб./кв.м'])  # Используем одну квадратную скобку для выбора Series
+    
     # Масштабируем данные
     scaler = StandardScaler()
     X_scaled = scaler.fit_transform(X_target)
+    
     # Разделяем данные на обучающую и тестовую выборки
     X_learn, X_test, Y_learn, Y_test = train_test_split(X_scaled, Y_target, test_size=0.2, random_state=12)
-    # Находим лучший K и ошибку
-    k, error = find_best_k(X_learn, X_test, Y_learn, Y_test)  
-    # Обучаем KNN
-    knn = KNeighborsRegressor(n_neighbors=k, weights='distance', metric='euclidean')
+    
+    # Находим лучший K и ошибку, а также другие параметры
+    best_k, best_weights, best_metric, best_p, error = find_best_k(X_learn, X_test, Y_learn, Y_test)
+    
+    # Создаем и обучаем KNN с найденными параметрами
+    knn = KNeighborsRegressor(
+        n_neighbors=best_k, 
+        weights=best_weights, 
+        metric=best_metric, 
+        p=best_p
+    )
     knn.fit(X_learn, Y_learn)
-    print(f'best_k = {k}, best_error = {error:.4f}%')
+    
+    print(f'Лучший k = {best_k}, Лучшие веса = {best_weights}, Лучшая метрика = {best_metric}, Лучший p = {best_p}, Ошибка = {error:.4f}%')
+    
     # Сохраняем модель
     joblib.dump(knn, 'knn_model.joblib')
-    return scaler 
+    
+    return scaler
 
-data_study = preprocessing_of_data('C:\\Users\\andrew\\Downloads\\office_nn_copy.xlsx')
+data_study = preprocessing_of_data('C:\\Users\\andrew\\Downloads\\office_nn.xlsx')
 scaler = knn_study(data_study)
 
 def knn_predict(data, original_data, scaler):
@@ -158,7 +247,7 @@ def knn_predict(data, original_data, scaler):
     knn = joblib.load('knn_model.joblib')
     
     # Определяем признаки
-    X_target = data[['Класс', 'Охрана', 'Парковка', 'Состояние ремонта', 'Отдельный вход', 'Широта', 'Долгота', 'Общая площадь,\nкв.м']]
+    X_target = data[['Класс', 'Функциональная зона', 'Охрана', 'Парковка', 'Состояние ремонта', 'Отдельный вход', 'Широта', 'Долгота', 'Общая площадь,\nкв.м']]
     # Масштабируем данные
     X_scaled = scaler.transform(X_target)
     
@@ -177,7 +266,7 @@ def knn_predict(data, original_data, scaler):
     
     return predicted_value, distances, indices
 
-def create_excel_table(data, original_data, predicted_value, indices, output_file='data.xlsx'):
+def create_excel_table(data, original_data, predicted_value, distances, indices, output_file='data.xlsx'):
     """
     Функция для создания Excel таблицы с предсказанными значениями и выделением строк.
     Сохраняет результат в Excel файл.
@@ -207,10 +296,26 @@ def create_excel_table(data, original_data, predicted_value, indices, output_fil
         else:
             indices_neighbors = indices[i][:k]
 
-        for neighbor_index in indices_neighbors:
+         # Добавляем соседей и расстояния
+        for j, neighbor_index in enumerate(indices_neighbors):
             neighbor_row = original_data.iloc[neighbor_index].copy()
             neighbor_row['Предсказанная цена, руб/кв.м.'] = None
+
+            # Расчет расстояния до соседа
+            distance = haversine_distance(
+                row['Широта'], row['Долгота'],  # Координаты текущей точки
+                neighbor_row['Широта'], neighbor_row['Долгота']  # Координаты соседа
+            )
+            neighbor_row['Расстояние, м'] = distance
+            neighbor_row['Расстояние до соседа'] = distances[i][j]  # Добавление расстояния до соседа из KNN
+
+            # Удаляем широту и долготу, если больше не нужны
+            neighbor_row.drop(['Широта', 'Долгота'], inplace=True)
+
+            # Добавляем строку соседа в new_rows
             new_rows.append(neighbor_row)
+
+
 
     # Создаём DataFrame из новых строк
     result_df = pd.DataFrame(new_rows)
@@ -236,63 +341,97 @@ def create_excel_table(data, original_data, predicted_value, indices, output_fil
 
     return result_df
 
-def create_excel_table_template(result_df, template_file='Таблица шаблон.xlsx', calculate_change=True):
-    # Чтение первых двух строк из файла шаблона
-    template_df = pd.read_excel(template_file, header=None, nrows=2)
-    
-    # Создаем новый DataFrame на основе нужных столбцов из result_df
+
+def create_excel_table_template(result_df, template_file='Таблица шаблон.xlsx', output_table='Итог.xlsx', calculate_change=True):
+    # Удаляем содержимое или создаём новый файл Итог.xlsx
+    if os.path.exists(output_table):
+        # Создаём новую рабочую книгу, чтобы очистить файл
+        wb = Workbook()
+        wb.save(output_table)
+        wb.close()
+
+    # Копируем шаблон в очищенный Итог.xlsx
+    copyfile(template_file, output_table)
+    wb = load_workbook(output_table)
+    ws = wb.active
+
+    # Загружаем первые две строки из шаблона
+    template_wb = load_workbook(template_file)
+    template_ws = template_wb.active
+
+    # Копируем первые две строки из шаблона
+    for row in template_ws.iter_rows(min_row=1, max_row=2):  # Только строки 1 и 2
+        for cell in row:
+            new_cell = ws.cell(row=cell.row, column=cell.column, value=cell.value)  # Копируем значения
+            if cell.has_style:
+                new_cell._style = cell._style  # Копируем стиль
+
+    template_wb.close()
+
+    # Создаем новый DataFrame на основе result_df
     new_dataframe = result_df[['N', 'Ссылка', 'Сегмент', 'Тип сделки', 
-                               'Город', 'Адрес', 'Функциональная зона', 'Широта', 'Долгота',
+                               'Город', 'Адрес', 'Функциональная зона', 'Расстояние, м',
                                'Этаж', 'Класс', 'Состояние ремонта', 'Общая площадь,\nкв.м',  
                                'Год постройки', 'Этажность', 'Материал стен', 'Охрана', 'Парковка',
                                'Удельная цена, руб./кв.м', 'Цена предложения,\n руб.', 
-                               'Предсказанная цена, руб/кв.м.', 'Дата парсинга', 'Срок жизни/возраст объявления']]
+                               'Предсказанная цена, руб/кв.м.', 'Дата парсинга', 'Срок жизни/возраст объявления', 'Расстояние до соседа']]
     
-     # Преобразуем значения в столбцах "Состояние ремонта", "Парковка" и "Охрана"
-    new_dataframe.loc[:, 'Состояние ремонта'] = new_dataframe['Состояние ремонта'].replace({True: 'Есть', False: 'Нет'})
-    new_dataframe.loc[:, 'Парковка'] = new_dataframe['Парковка'].replace({True: 'Есть', False: 'Нет'})
-    new_dataframe.loc[:, 'Охрана'] = new_dataframe['Охрана'].replace({True: 'Есть', False: 'Нет'})
+    # Применяем декодирование для столбца 'Функциональная зона'
+    new_dataframe['Функциональная зона'] = label_encoder_1.inverse_transform((new_dataframe['Функциональная зона']).values)
 
-    # Инициализация новых столбцов
+    # Применяем декодирование для столбца 'Класс'
+    new_dataframe['Класс'] = label_encoder_2.inverse_transform((new_dataframe['Класс']).values)
+
+
+    # Преобразуем значения в столбцах
+    new_dataframe['Состояние ремонта'] = new_dataframe['Состояние ремонта'].replace({True: 'Есть', False: 'Нет'})
+    new_dataframe['Парковка'] = new_dataframe['Парковка'].replace({True: 'Есть', False: 'Нет'})
+    new_dataframe['Охрана'] = new_dataframe['Охрана'].replace({True: 'Есть', False: 'Нет'})
+
+    # Добавляем новые столбцы
     new_dataframe.insert(4, 'Тип рынка', 'Офис')
-    new_dataframe.insert(12, 'Количество комнат', 1)
-    new_dataframe.insert(23, 'Предсказанная цена, руб.', 
-                         new_dataframe['Предсказанная цена, руб/кв.м.'] * new_dataframe['Общая площадь,\nкв.м'])
-                         
-    if calculate_change:
-        new_dataframe.insert(24, 'Изменение цены, %', 
-                             ((new_dataframe['Предсказанная цена, руб/кв.м.'] - new_dataframe['Удельная цена, руб./кв.м']) / 
-                              new_dataframe['Удельная цена, руб./кв.м']) * 100)
-    else:
-        new_dataframe.insert(24, 'Изменение цены, %', '-')
-    
-    # Загружаем существующий Excel файл
-    wb = load_workbook(template_file)
-    ws = wb.active
-    
-    # Записываем строки из new_dataframe начиная с 3-й строки (первая и вторая строки уже заняты)
-    start_row = 3
-    for r_idx, row in new_dataframe.iterrows():
-        for c_idx, value in enumerate(row, start=1):
-            ws.cell(row=start_row + r_idx, column=c_idx, value=value)
+    new_dataframe.insert(11, 'Количество комнат', 1)
+    # Вставляем столбец 'Предсказанная цена, руб.' в нужную позицию
+    new_dataframe.insert(22, 'Предсказанная цена, руб.', 
+                        new_dataframe['Предсказанная цена, руб/кв.м.'] * new_dataframe['Общая площадь,\nкв.м'])
 
-    # Выделение предсказанных строк желтым цветом
+    # Вставляем столбец 'Изменение цены, %' после 'Предсказанная цена, руб.'
+    if calculate_change:
+        new_dataframe.insert(23, 'Изменение цены, %', 
+                            ((new_dataframe['Предсказанная цена, руб/кв.м.'] - new_dataframe['Удельная цена, руб./кв.м']) / 
+                            new_dataframe['Удельная цена, руб./кв.м']) * 100)
+    else:
+        new_dataframe.insert(23, 'Изменение цены, %', '-')
+
+    
+
+    # Добавляем строки new_dataframe в Excel, начиная с третьей строки
+    start_row = 3
+    for r_idx, row in enumerate(dataframe_to_rows(new_dataframe, index=False, header=False), start=start_row):
+        for c_idx, value in enumerate(row, start=1):
+            ws.cell(row=r_idx, column=c_idx, value=value)
+
+    # Выделяем предсказанные строки желтым цветом
     yellow_fill = PatternFill(start_color='FFFF00', end_color='FFFF00', fill_type='solid')
     for i in range(len(new_dataframe)):
         if pd.notna(new_dataframe.iloc[i]['Предсказанная цена, руб/кв.м.']):
             for col in range(1, len(new_dataframe.columns) + 1):
                 ws.cell(row=start_row + i, column=col).fill = yellow_fill
 
-    # Строим гистограмму для столбца "Изменение цены, %" и вставляем её в Excel
-    plot_histogram(new_dataframe['Изменение цены, %'], 'histogram.png')
-    insert_image_to_excel(ws, 'histogram.png', 'AB3')
+    # Генерируем гистограмму и сохраняем изображение
+    histogram_filename = "histogram.png"
+    plot_histogram(new_dataframe['Изменение цены, %'], histogram_filename)
+
+    # Вставляем гистограмму в ячейку AE4
+    insert_image_to_excel(ws, histogram_filename, 'AE4')
 
     # Сохранение и закрытие файла
-    wb.save(template_file)
+    wb.save(output_table)
     wb.close()
-    
-    # Открытие Excel файла для просмотра
-    os.startfile(template_file)
+
+    # Открытие нового файла для просмотра
+    os.startfile(output_table)
+
 
 
 def plot_histogram(data, filename):
